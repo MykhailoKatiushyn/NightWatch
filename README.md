@@ -40,4 +40,4 @@ Brightness adjustment via buttons using external interrupts with debounce protec
 
 # 4. Scheme
 
-etc
+![Scheme](scheme/scheme_v1.png)
