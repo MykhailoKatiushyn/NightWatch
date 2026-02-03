@@ -1,3 +1,15 @@
+/*
+ * Project: NightWatch - Circadian Rhythm Lamp
+ * Author: Mykhailo Katiushyn
+ * Date: Feb 2026
+ * MCU: ATmega328P
+ * Description: 
+ * Controls RGB LED strip based on time from DS3231 RTC.
+ * Uses hardware PWM, custom I2C driver, and integer math fading.
+ */
+
+
+ 
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
@@ -10,6 +22,10 @@
 #define GREEN_CH OCR0A
 #define BLUE_CH OCR0B
 
+#define TIME_SUNRISE  480   // 08:00
+#define TIME_SUNSET   1230  // 20:30
+#define TIME_SLEEP    1320  // 22:00
+
 uint8_t red_prev = 0;
 uint8_t green_prev = 0;
 uint8_t blue_prev = 0;
@@ -17,6 +33,7 @@ uint8_t blue_prev = 0;
 uint16_t total_minutes = 0;
 
 volatile uint8_t master_brightness = 100;
+
 
 void init_pwm () {
     //init pins output
@@ -43,23 +60,33 @@ void set_rgb (uint8_t red, uint8_t green, uint8_t blue) {
 }
 
 void fade_to(uint8_t r_target, uint8_t g_target, uint8_t b_target, uint16_t duration_ms) {
-    const uint8_t step_delay = 1; 
+    if (duration_ms == 0) {
+        set_rgb(r_target, g_target, b_target);
+        red_prev = r_target;
+        green_prev = g_target;
+        blue_prev = b_target;
+        return;
+    }
+
+    const uint8_t step_delay = 10;
+    uint16_t steps = duration_ms / step_delay;
     
-    int steps = duration_ms / step_delay; 
-    if (steps == 0) steps = 1;
+    int16_t delta_r = (int16_t)r_target - red_prev;
+    int16_t delta_g = (int16_t)g_target - green_prev;
+    int16_t delta_b = (int16_t)b_target - blue_prev;
 
-    for (int i = 0; i <= steps; i++) {
-        float t = (float)i / steps;
-
-        uint8_t r_now = red_prev + (int)(r_target - red_prev) * t;
-        uint8_t g_now = green_prev + (int)(g_target - green_prev) * t;
-        uint8_t b_now = blue_prev + (int)(b_target - blue_prev) * t;
+    for (uint16_t i = 1; i <= steps; i++) {
+        
+        uint8_t r_now = red_prev + ((int32_t)delta_r * i) / steps;
+        uint8_t g_now = green_prev + ((int32_t)delta_g * i) / steps;
+        uint8_t b_now = blue_prev + ((int32_t)delta_b * i) / steps;
 
         set_rgb(r_now, g_now, b_now);
-        
         _delay_ms(step_delay);
     }
 
+    set_rgb(r_target, g_target, b_target);
+    
     red_prev = r_target;
     green_prev = g_target;
     blue_prev = b_target;
@@ -71,6 +98,7 @@ uint8_t bcd_to_dec(uint8_t val) {
 uint8_t dec_to_bcd(uint8_t val) {
     return ((val / 10 * 16) + (val % 10));
 }
+
 void i2c_init () {
     TWSR = 0x00; //clear register and set prescaler - 1
 
@@ -112,14 +140,14 @@ uint8_t i2c_read_ack () {
     return data;
 }
 
-void set_time () {
+void set_time (uint8_t hrs, uint8_t min, uint8_t sec) {
     i2c_start();
     i2c_write(0xD0);
     i2c_write(0x00);
     
-    i2c_write(dec_to_bcd(0));
-    i2c_write(dec_to_bcd(31));
-    i2c_write(dec_to_bcd(2));
+    i2c_write(dec_to_bcd(sec));
+    i2c_write(dec_to_bcd(min));
+    i2c_write(dec_to_bcd(hrs));
     
     i2c_stop();
 }
@@ -134,7 +162,7 @@ void get_time () {
         uint8_t minutes = bcd_to_dec(i2c_read_ack()); // Read minutes (0x01), ACK - need to read more
         uint8_t hours = bcd_to_dec(i2c_read_nack()); // Read hours (0x02), NACK - stop
         
-        total_minutes = (hours * 60) + minutes;
+        total_minutes = (uint16_t)(hours * 60) + minutes;
 
         i2c_stop();
 }
@@ -168,22 +196,19 @@ int main (void) {
 
     i2c_init();
 
-    //set_time();
+    // set_time(17, 40, 10);
 
     while (1) {
-
         get_time();
 
-        if ((total_minutes >= 1320) || (total_minutes < 480)) {
-             fade_to(50, 0, 0, 5000);
+        if ((total_minutes >= TIME_SLEEP) || (total_minutes < TIME_SUNRISE)) {
+             fade_to(255, 0, 0, 5000);
         }
-        else if (total_minutes >= 1230) {
+        else if (total_minutes >= TIME_SUNSET) {
              fade_to(255, 140, 20, 5000);
         }
         else {
              fade_to(150, 0, 255, 5000);
         }
-        
-        _delay_ms(1000);
     }
 }
